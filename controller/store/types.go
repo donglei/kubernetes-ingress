@@ -23,20 +23,26 @@ type ServicePort struct {
 }
 
 type HAProxySrv struct {
-	IP       string
-	Disabled bool
+	// Srv disabled is srv with address ""
+	Address  string
 	Modified bool
 }
 
-//Endpoints is useful data from k8s structures about Endpoints
-type Endpoints struct {
-	Namespace   string
-	Service     StringW
+//PortEndpoints describes endpionts of a service port
+type PortEndpoints struct {
+	Port        int64
 	BackendName string
-	Ports       map[string]int64
-	Addresses   map[string]struct{}
+	AddrsUsed   map[string]struct{}
+	AddrRemain  map[string]struct{}
 	HAProxySrvs map[string]*HAProxySrv
-	Status      Status
+}
+
+//Endpoints describes endpoints of a service
+type Endpoints struct {
+	Namespace string
+	Service   StringW
+	Ports     map[string]*PortEndpoints
+	Status    Status
 }
 
 //Service is useful data from k8s structures about service
@@ -68,11 +74,8 @@ type IngressPath struct {
 	ServiceName       string
 	ServicePortInt    int64
 	ServicePortString string
-	TargetPort        int64
 	Path              string
 	ExactPathMatch    bool
-	IsTCPService      bool
-	IsSSLPassthrough  bool
 	IsDefaultBackend  bool
 	Status            Status
 }

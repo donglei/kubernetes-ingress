@@ -101,8 +101,6 @@ func (k K8s) EventIngress(ns *Namespace, data *Ingress, controllerClass string) 
 							newRule.Status = MODIFIED
 						}
 						// Sync internal data
-						newPath.IsTCPService = oldPath.IsTCPService
-						newPath.IsSSLPassthrough = oldPath.IsSSLPassthrough
 						newPath.IsDefaultBackend = oldPath.IsDefaultBackend
 					} else {
 						newPath.Status = ADDED
@@ -210,8 +208,7 @@ func (k K8s) EventIngress(ns *Namespace, data *Ingress, controllerClass string) 
 	return updateRequired
 }
 
-func (k K8s) EventEndpoints(ns *Namespace, data *Endpoints, processEndpointsSrvs func(oldEndpoints, newEndpoints *Endpoints)) (updateRequired bool) {
-	updateRequired = false
+func (k K8s) EventEndpoints(ns *Namespace, data *Endpoints, updateHAproxySrvs func(oldEndpoints, newEndpoints *PortEndpoints)) (updateRequired bool) {
 	switch data.Status {
 	case MODIFIED:
 		newEndpoints := data
@@ -223,8 +220,11 @@ func (k K8s) EventEndpoints(ns *Namespace, data *Endpoints, processEndpointsSrvs
 		if oldEndpoints.Equal(newEndpoints) {
 			return false
 		}
-		data.BackendName = oldEndpoints.BackendName
-		processEndpointsSrvs(oldEndpoints, newEndpoints)
+		for portName, oldPortEdpts := range oldEndpoints.Ports {
+			if newPortEdpts, ok := newEndpoints.Ports[portName]; ok {
+				updateHAproxySrvs(oldPortEdpts, newPortEdpts)
+			}
+		}
 		ns.Endpoints[data.Service.Value] = newEndpoints
 		return true
 	case ADDED:
@@ -234,7 +234,7 @@ func (k K8s) EventEndpoints(ns *Namespace, data *Endpoints, processEndpointsSrvs
 			}
 			if !old.Equal(data) {
 				data.Status = MODIFIED
-				return k.EventEndpoints(ns, data, processEndpointsSrvs)
+				return k.EventEndpoints(ns, data, updateHAproxySrvs)
 			}
 			return updateRequired
 		}

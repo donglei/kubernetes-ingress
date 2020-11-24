@@ -95,7 +95,7 @@ func (c *HAProxyController) monitorChanges() {
 		// https://github.com/kubernetes/enhancements/issues/1453
 		var ii cache.SharedIndexInformer
 		if c.k8s.IsNetworkingV1Beta1ApiSupported() {
-			logger.Warningf("Running on Kubernetes < 1.22: using ingresses.networking.k8s.io/v1beta1 for the Ingress/v1beta1 resources")
+			//logger.Warningf("Running on Kubernetes < 1.22: using ingresses.networking.k8s.io/v1beta1 for the Ingress/v1beta1 resources")
 			ii = factory.Networking().V1beta1().Ingresses().Informer()
 		} else {
 			logger.Warningf("Running on Kubernetes < 1.14: using ingresses.extensions/v1beta1 for the Ingress shared informer, networking.k8s.io API group is not available")
@@ -225,7 +225,7 @@ func (c *HAProxyController) SyncData(chConfigMapReceivedAndProcessed chan bool) 
 		case INGRESS:
 			change = c.Store.EventIngress(ns, job.Data.(*store.Ingress), c.IngressClass)
 		case ENDPOINTS:
-			change = c.Store.EventEndpoints(ns, job.Data.(*store.Endpoints), c.processEndpointsSrvs)
+			change = c.Store.EventEndpoints(ns, job.Data.(*store.Endpoints), c.updateHAProxySrvs)
 		case SERVICE:
 			change = c.Store.EventService(ns, job.Data.(*store.Service))
 		case CONFIGMAP:
@@ -237,5 +237,60 @@ func (c *HAProxyController) SyncData(chConfigMapReceivedAndProcessed chan bool) 
 			change = c.Store.EventSecret(ns, job.Data.(*store.Secret))
 		}
 		hadChanges = hadChanges || change
+	}
+}
+
+// updateHAProxySrvs dynamically update (via runtime socket) HAProxy backend servers with modifed Addresses
+func (c *HAProxyController) updateHAProxySrvs(oldEndpoints, newEndpoints *store.PortEndpoints) {
+	if oldEndpoints.BackendName == "" {
+		return
+	}
+	newEndpoints.HAProxySrvs = oldEndpoints.HAProxySrvs
+	newEndpoints.BackendName = oldEndpoints.BackendName
+	haproxySrvs := newEndpoints.HAProxySrvs
+	newAddresses := newEndpoints.AddrRemain
+	usedAddresses := newEndpoints.AddrsUsed
+	// Disable stale entries from HAProxySrvs
+	// and provide list of Disabled Srvs
+	disabledSrvs := make(map[string]struct{})
+	for srvName, srv := range haproxySrvs {
+		if _, ok := newAddresses[srv.Address]; ok {
+			usedAddresses[srv.Address] = struct{}{}
+			delete(newAddresses, srv.Address)
+		} else {
+			haproxySrvs[srvName].Address = ""
+			haproxySrvs[srvName].Modified = true
+			disabledSrvs[srvName] = struct{}{}
+		}
+	}
+	// Configure new Addresses in available HAProxySrvs
+	for newAddr := range newAddresses {
+		if len(disabledSrvs) == 0 {
+			break
+		}
+		// Pick a rondom available srv
+		for srvName := range disabledSrvs {
+			haproxySrvs[srvName].Address = newAddr
+			haproxySrvs[srvName].Modified = true
+			usedAddresses[newAddr] = struct{}{}
+			delete(disabledSrvs, srvName)
+			delete(newAddresses, newAddr)
+			break
+		}
+	}
+	// Dynamically updates HAProxy backend servers  with HAProxySrvs content
+	for srvName, srv := range haproxySrvs {
+		if !srv.Modified {
+			continue
+		}
+		if srv.Address == "" {
+			logger.Debugf("server '%s/%s' changed status to %v", newEndpoints.BackendName, srvName, "maint")
+			logger.Error(c.Client.SetServerAddr(newEndpoints.BackendName, srvName, "127.0.0.1", 0))
+			logger.Error(c.Client.SetServerState(newEndpoints.BackendName, srvName, "maint"))
+		} else {
+			logger.Debugf("server '%s/%s' changed status to %v", newEndpoints.BackendName, srvName, "ready")
+			logger.Error(c.Client.SetServerAddr(newEndpoints.BackendName, srvName, srv.Address, 0))
+			logger.Error(c.Client.SetServerState(newEndpoints.BackendName, srvName, "ready"))
+		}
 	}
 }
