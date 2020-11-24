@@ -64,7 +64,8 @@ func (c *Configuration) HAProxyRulesInit() error {
 		c.HAProxyRules.AddRule(rules.ReqSetVar{
 			Name:       "path",
 			Scope:      "txn",
-			Expression: "path,lower",
+			Expression: "path",
+			//Expression: "path,lower",
 		}, FrontendHTTP, FrontendHTTPS),
 		c.HAProxyRules.AddRule(rules.ReqSetVar{
 			Name:       "host",
